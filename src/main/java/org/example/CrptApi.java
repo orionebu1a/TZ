@@ -15,19 +15,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.*;
 
 public class CrptApi {
-    private Logger logger = Logger.getLogger(CrptApi.class.getName());
-    private TimeUnit timeUnit;
-    private int requestLimit;
+    private static Logger logger = Logger.getLogger(CrptApi.class.getName());
+    private static TimeUnit timeUnit;
+    private static int requestLimit;
 
-    private int numRequest;
+    private static int firstData = 0;
 
-    private String createDocUrl = "https://ismp.crpt.ru/api/v3/lk/documents/create";
+    private static String createDocUrl = "https://ismp.crpt.ru/api/v3/lk/documents/create";
 
     private HttpURLConnection connection;
 
-    private String docFormat = "MANUAL";
+    private static String docFormat = "MANUAL";
 
-    private String type = "LP_INTRODUCE_GOODS_XML";
+    private static String type = "LP_INTRODUCE_GOODS_XML";
+
+    private DocumentAnswer docAnswer;
 
     private static boolean writeAvailable = false;
 
@@ -74,6 +76,20 @@ public class CrptApi {
         }
     }
 
+    public class DocumentAnswer{
+        String value;
+        String code;
+        Integer error_message;
+        String description;
+
+        public DocumentAnswer(String value, String code, Integer error_message, String description) {
+            this.value = value;
+            this.code = code;
+            this.error_message = error_message;
+            this.description = description;
+        }
+    }
+
     public void openConnection(String urlStr) throws IOException {
         URL url = new URL(urlStr);
         connection = (HttpURLConnection) url.openConnection();
@@ -88,7 +104,7 @@ public class CrptApi {
         this.requestLimit = requestLimit;
     }
 
-    public void checkAvailable(){
+    public synchronized void checkAvailable(){
         int curNum = getReqNum();
         Date now = new Date();
         if(curNum == 0){
@@ -96,24 +112,31 @@ public class CrptApi {
             addDateMap();
             return;
         }
-        if(now.getTime() - getDate(curNum - requestLimit).getTime() <= timeUnit.toMillis(1)){
-            setWriteAvailable(false);
+        if(getDate(curNum - requestLimit) != null){
+            long delta = now.getTime() - getDate(curNum - requestLimit).getTime();
+            long reqDelta = timeUnit.toMillis(1);
+            if(delta <= reqDelta){
+                setWriteAvailable(false);
+                return;
+            }
         }
-        else{
-            setWriteAvailable(true);
-            addDateMap();
-            clearUseless();
-        }
+        setWriteAvailable(true);
+        addDateMap();
+        clearUseless();
     }
 
     private static synchronized void clearUseless() {
-
+        for(int i = firstData; i < getReqNum() - requestLimit; i++){
+            dateMap.remove(i);
+        }
     }
 
-    public void createDoc(String docBody, String signature){
+    public void createDoc (String docBody, String signature){
+        checkAvailable();
         while(!isWriteAvailable()){
             checkAvailable();
         }
+        increaseReqNum();
         try {
             openConnection(createDocUrl);
         } catch (IOException e) {
@@ -123,7 +146,7 @@ public class CrptApi {
         connection.setDoOutput(true);
         try {
             connection.setRequestMethod("POST");
-        } catch (ProtocolException e) {
+        } catch (Exception e) {
             logger.log(Level.INFO, "connection couldn't post");
         }
         try(DataOutputStream dos = new DataOutputStream(connection.getOutputStream())){
@@ -138,9 +161,10 @@ public class CrptApi {
         }
         try (BufferedReader bf = new BufferedReader(new InputStreamReader(connection.getInputStream()))){
             String line = bf.readLine();
+            docAnswer = new Gson().fromJson(line, DocumentAnswer.class);
         } catch (IOException e) {
             logger.log(Level.INFO, "error in read IOS");
         }
-        closeConnection();;
+        closeConnection();
     }
 }
